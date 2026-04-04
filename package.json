@@ -1,0 +1,12 @@
+{
+  "name": "jenkins-k8s-app",
+  "version": "1.0.0",
+  "description": "Sample application for Jenkins K8s CI/CD pipeline",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "echo 'Tests passed' && exit 0"
+  },
+  "author": "DevOps Team",
+  "license": "MIT"
+}

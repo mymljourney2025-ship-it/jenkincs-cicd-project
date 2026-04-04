@@ -1,0 +1,26 @@
+# =============================================================================
+# Service — Expose application via AWS NLB (public access)
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp
+  namespace: application
+  labels:
+    app: myapp
+  annotations:
+    # Use AWS Network Load Balancer
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: "/health"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: "HTTP"
+spec:
+  type: LoadBalancer
+  selector:
+    app: myapp
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

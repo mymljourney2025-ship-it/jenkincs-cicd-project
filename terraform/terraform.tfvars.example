@@ -1,0 +1,29 @@
+# =============================================================================
+# terraform.tfvars — Copy this to terraform.tfvars and fill in your values
+# =============================================================================
+
+project_name = "jenkins-k8s"
+environment  = "dev"
+aws_region   = "us-east-1"
+owner        = "devops-team"
+
+# VPC
+vpc_cidr        = "10.0.0.0/16"
+public_subnets  = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+private_subnets = ["10.0.10.0/24", "10.0.11.0/24", "10.0.12.0/24"]
+
+# EKS
+kubernetes_version  = "1.29"
+node_instance_types = ["t3.large"]
+node_desired_size   = 2
+node_min_size       = 1
+node_max_size       = 5
+node_disk_size      = 50
+
+# ECR
+ecr_max_image_count = 30
+
+# Jenkins
+jenkins_admin_user = "admin"
+jenkins_admin_pass = "CHANGE_ME_IMMEDIATELY"   # Use: export TF_VAR_jenkins_admin_pass="your-password"
+jenkins_storage_size = "50Gi"

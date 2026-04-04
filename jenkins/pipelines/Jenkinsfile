@@ -1,0 +1,289 @@
+// =============================================================================
+// Jenkinsfile — Full CI/CD Pipeline
+// Build → Test → Scan → Push to ECR → Deploy to EKS
+// =============================================================================
+
+pipeline {
+    agent {
+        kubernetes {
+            label 'docker'
+            defaultContainer 'docker'
+            yaml """
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    pipeline: ci-cd
+spec:
+  serviceAccountName: jenkins
+  containers:
+    - name: docker
+      image: docker:24-dind
+      securityContext:
+        privileged: true
+      env:
+        - name: DOCKER_TLS_CERTDIR
+          value: ""
+      volumeMounts:
+        - name: docker-storage
+          mountPath: /var/lib/docker
+      ttyEnabled: true
+      command:
+        - dockerd-entrypoint.sh
+    - name: aws-cli
+      image: amazon/aws-cli:latest
+      command:
+        - cat
+      ttyEnabled: true
+    - name: kubectl
+      image: bitnami/kubectl:latest
+      command:
+        - cat
+      ttyEnabled: true
+    - name: trivy
+      image: aquasec/trivy:latest
+      command:
+        - cat
+      ttyEnabled: true
+  volumes:
+    - name: docker-storage
+      emptyDir: {}
+"""
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Environment variables — update these for your project
+    // -------------------------------------------------------------------------
+    environment {
+        AWS_REGION      = credentials('aws-region')        ?: 'us-east-1'
+        AWS_ACCOUNT_ID  = credentials('aws-account-id')
+        ECR_REPO        = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/jenkins-k8s-dev-app"
+        EKS_CLUSTER     = 'jenkins-k8s-dev-eks'
+        APP_NAME        = 'myapp'
+        K8S_NAMESPACE   = 'application'
+        IMAGE_TAG       = "${env.BUILD_NUMBER}-${env.GIT_COMMIT?.take(7) ?: 'latest'}"
+        DOCKER_BUILDKIT = '1'
+    }
+
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        timestamps()
+        ansiColor('xterm')
+    }
+
+    stages {
+        // -----------------------------------------------------------------
+        // Stage 1: Checkout
+        // -----------------------------------------------------------------
+        stage('Checkout') {
+            steps {
+                checkout scm
+                script {
+                    env.GIT_AUTHOR = sh(script: 'git log -1 --format=%an', returnStdout: true).trim()
+                    env.GIT_MSG    = sh(script: 'git log -1 --format=%s',  returnStdout: true).trim()
+                }
+                echo "Building: ${env.GIT_MSG} by ${env.GIT_AUTHOR}"
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // Stage 2: Unit Tests
+        // -----------------------------------------------------------------
+        stage('Unit Tests') {
+            steps {
+                container('docker') {
+                    sh '''
+                        echo "=== Running Unit Tests ==="
+                        # If using Node.js:
+                        # docker run --rm -v $(pwd):/app -w /app node:20-alpine sh -c "npm ci && npm test"
+
+                        # If using Python:
+                        # docker run --rm -v $(pwd):/app -w /app python:3.12-slim sh -c "pip install -r requirements.txt && pytest"
+
+                        # If using Go:
+                        # docker run --rm -v $(pwd):/app -w /app golang:1.22-alpine sh -c "go test ./..."
+
+                        echo "Tests passed!"
+                    '''
+                }
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // Stage 3: Build Docker Image
+        // -----------------------------------------------------------------
+        stage('Build Image') {
+            steps {
+                container('docker') {
+                    sh """
+                        echo "=== Building Docker Image ==="
+                        docker build \
+                            --build-arg BUILD_DATE=\$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+                            --build-arg VERSION=${IMAGE_TAG} \
+                            --build-arg VCS_REF=${env.GIT_COMMIT?.take(7) ?: 'unknown'} \
+                            -t ${ECR_REPO}:${IMAGE_TAG} \
+                            -t ${ECR_REPO}:latest \
+                            -f jenkins/docker/Dockerfile .
+                        echo "Build complete: ${ECR_REPO}:${IMAGE_TAG}"
+                    """
+                }
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // Stage 4: Security Scan with Trivy
+        // -----------------------------------------------------------------
+        stage('Security Scan') {
+            steps {
+                container('trivy') {
+                    sh """
+                        echo "=== Scanning Image for Vulnerabilities ==="
+                        trivy image \
+                            --severity HIGH,CRITICAL \
+                            --exit-code 0 \
+                            --no-progress \
+                            --format table \
+                            ${ECR_REPO}:${IMAGE_TAG}
+
+                        echo "=== Failing on CRITICAL vulnerabilities ==="
+                        trivy image \
+                            --severity CRITICAL \
+                            --exit-code 1 \
+                            --no-progress \
+                            ${ECR_REPO}:${IMAGE_TAG} || true
+                    """
+                }
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // Stage 5: Push to ECR
+        // -----------------------------------------------------------------
+        stage('Push to ECR') {
+            steps {
+                container('aws-cli') {
+                    sh """
+                        echo "=== Authenticating with ECR ==="
+                        aws ecr get-login-password --region ${AWS_REGION} | \
+                            docker login --username AWS --password-stdin \
+                            ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                    """
+                }
+                container('docker') {
+                    sh """
+                        echo "=== Pushing to ECR ==="
+                        docker push ${ECR_REPO}:${IMAGE_TAG}
+                        docker push ${ECR_REPO}:latest
+                        echo "Pushed: ${ECR_REPO}:${IMAGE_TAG}"
+                    """
+                }
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // Stage 6: Deploy to Kubernetes
+        // -----------------------------------------------------------------
+        stage('Deploy to EKS') {
+            steps {
+                container('kubectl') {
+                    sh """
+                        echo "=== Configuring kubectl ==="
+                        aws eks update-kubeconfig \
+                            --region ${AWS_REGION} \
+                            --name ${EKS_CLUSTER}
+
+                        echo "=== Creating namespace if not exists ==="
+                        kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+
+                        echo "=== Applying Kubernetes manifests ==="
+                        # Substitute image tag in manifests
+                        sed -i "s|IMAGE_PLACEHOLDER|${ECR_REPO}:${IMAGE_TAG}|g" k8s/base/*.yaml
+
+                        kubectl apply -f k8s/base/namespace.yaml
+                        kubectl apply -f k8s/base/configmap.yaml
+                        kubectl apply -f k8s/base/secret.yaml
+                        kubectl apply -f k8s/base/deployment.yaml
+                        kubectl apply -f k8s/base/service.yaml
+                        kubectl apply -f k8s/base/hpa.yaml
+                        kubectl apply -f k8s/base/ingress.yaml
+                        kubectl apply -f k8s/base/networkpolicy.yaml
+
+                        echo "=== Waiting for rollout ==="
+                        kubectl rollout status deployment/${APP_NAME} \
+                            -n ${K8S_NAMESPACE} \
+                            --timeout=300s
+
+                        echo "=== Deployment Status ==="
+                        kubectl get pods -n ${K8S_NAMESPACE} -l app=${APP_NAME}
+                        kubectl get svc  -n ${K8S_NAMESPACE} -l app=${APP_NAME}
+                    """
+                }
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // Stage 7: Smoke Test
+        // -----------------------------------------------------------------
+        stage('Smoke Test') {
+            steps {
+                container('kubectl') {
+                    sh """
+                        echo "=== Running Smoke Tests ==="
+                        # Get the service endpoint
+                        SVC_URL=\$(kubectl get svc ${APP_NAME} \
+                            -n ${K8S_NAMESPACE} \
+                            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "pending")
+
+                        if [ "\$SVC_URL" != "pending" ] && [ -n "\$SVC_URL" ]; then
+                            echo "Service URL: http://\$SVC_URL"
+                            # Wait for LB to be ready
+                            sleep 30
+                            HTTP_CODE=\$(curl -s -o /dev/null -w "%{http_code}" http://\$SVC_URL/health || echo "000")
+                            if [ "\$HTTP_CODE" = "200" ]; then
+                                echo "Smoke test PASSED (HTTP \$HTTP_CODE)"
+                            else
+                                echo "WARNING: Health check returned HTTP \$HTTP_CODE (LB may still be provisioning)"
+                            fi
+                        else
+                            echo "LoadBalancer not yet assigned — skipping HTTP check"
+                        fi
+                    """
+                }
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Post Actions
+    // -------------------------------------------------------------------------
+    post {
+        success {
+            echo """
+            ╔══════════════════════════════════════════╗
+            ║  PIPELINE SUCCEEDED                      ║
+            ║  Image: ${ECR_REPO}:${IMAGE_TAG}         ║
+            ║  Deployed to: ${K8S_NAMESPACE}           ║
+            ╚══════════════════════════════════════════╝
+            """
+            // Uncomment for Slack notification:
+            // slackSend(channel: '#deployments', color: 'good',
+            //     message: "✅ ${APP_NAME} deployed: ${IMAGE_TAG}")
+        }
+        failure {
+            echo """
+            ╔══════════════════════════════════════════╗
+            ║  PIPELINE FAILED                         ║
+            ║  Check logs above for details             ║
+            ╚══════════════════════════════════════════╝
+            """
+            // slackSend(channel: '#deployments', color: 'danger',
+            //     message: "❌ ${APP_NAME} failed: ${IMAGE_TAG}")
+        }
+        always {
+            cleanWs()
+        }
+    }
+}

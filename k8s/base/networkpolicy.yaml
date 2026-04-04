@@ -1,0 +1,33 @@
+# =============================================================================
+# Network Policy — Restrict traffic to app pods
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: myapp-netpol
+  namespace: application
+  labels:
+    app: myapp
+spec:
+  podSelector:
+    matchLabels:
+      app: myapp
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from ALB / NLB (any source on port 3000)
+    - ports:
+        - protocol: TCP
+          port: 3000
+  egress:
+    # Allow DNS resolution
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow HTTPS outbound (APIs, AWS services)
+    - ports:
+        - protocol: TCP
+          port: 443

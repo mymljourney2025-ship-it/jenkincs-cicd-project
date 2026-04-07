@@ -117,7 +117,10 @@ resource "aws_eks_addon" "vpc_cni" {
   addon_name   = "vpc-cni"
 
   resolve_conflicts_on_update = "OVERWRITE"
-  depends_on                  = [aws_eks_node_group.general]
+  timeouts {
+    create = "40m"
+  }
+  depends_on = [aws_eks_cluster.this]
 }
 
 resource "aws_eks_addon" "coredns" {
@@ -125,7 +128,10 @@ resource "aws_eks_addon" "coredns" {
   addon_name   = "coredns"
 
   resolve_conflicts_on_update = "OVERWRITE"
-  depends_on                  = [aws_eks_node_group.general]
+  timeouts {
+    create = "40m"
+  }
+  depends_on = [aws_eks_cluster.this]
 }
 
 resource "aws_eks_addon" "kube_proxy" {
@@ -133,7 +139,10 @@ resource "aws_eks_addon" "kube_proxy" {
   addon_name   = "kube-proxy"
 
   resolve_conflicts_on_update = "OVERWRITE"
-  depends_on                  = [aws_eks_node_group.general]
+  timeouts {
+    create = "40m"
+  }
+  depends_on = [aws_eks_cluster.this]
 }
 
 resource "aws_eks_addon" "ebs_csi" {
@@ -141,7 +150,10 @@ resource "aws_eks_addon" "ebs_csi" {
   addon_name   = "aws-ebs-csi-driver"
 
   resolve_conflicts_on_update = "OVERWRITE"
-  depends_on                  = [aws_eks_node_group.general]
+  timeouts {
+    create = "40m"
+  }
+  depends_on = [aws_eks_cluster.this]
 }
 
 # --- CloudWatch Log Group for EKS ---

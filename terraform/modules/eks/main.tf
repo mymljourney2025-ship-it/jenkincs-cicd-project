@@ -83,7 +83,7 @@ resource "aws_eks_node_group" "jenkins" {
   node_role_arn   = var.node_role_arn
   subnet_ids      = var.private_subnet_ids
 
-  instance_types = ["t3.xlarge"]
+  instance_types = ["t2.medium"]
   disk_size      = 80
   capacity_type  = "ON_DEMAND"
 

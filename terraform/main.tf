@@ -85,6 +85,10 @@ data "aws_availability_zones" "available" {
 # Modules
 # -----------------------------------------------------------------------------
 
+locals {
+  eks_cluster_name = "${var.project_name}-${var.environment}-eks"
+}
+
 # --- VPC ---
 module "vpc" {
   source = "./modules/vpc"
@@ -106,7 +110,7 @@ module "iam" {
   account_id     = data.aws_caller_identity.current.account_id
   aws_region     = var.aws_region
   ecr_repo_arn   = module.ecr.repository_arn
-  eks_cluster_id = module.eks.cluster_name
+  eks_cluster_id = local.eks_cluster_name
 }
 
 # --- ECR Repository ---
